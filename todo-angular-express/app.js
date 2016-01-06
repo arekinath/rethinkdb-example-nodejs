@@ -1,9 +1,9 @@
 var async = require('async');
 var express = require('express');
 var bodyParser = require('body-parser');
-var r = require('rethinkdb');
 
 var config = require(__dirname + '/config.js');
+var r = require('rethinkdbdash')(config.rethinkdb);
 
 var app = express();
 
@@ -34,20 +34,10 @@ app.use(handleError);
  * Retrieve all todo items.
  */
 function listTodoItems(req, res, next) {
-  r.table('todos').orderBy({index: 'createdAt'}).run(req.app._rdbConn, function(err, cursor) {
-    if(err) {
-      return next(err);
-    }
-
+  r.table('todos').orderBy({index: 'createdAt'}).run().then(function (result) {
     //Retrieve all the todos in an array.
-    cursor.toArray(function(err, result) {
-      if(err) {
-        return next(err);
-      }
-
-      res.json(result);
-    });
-  });
+    res.json(result);
+  }).error(next);
 }
 
 /*
@@ -59,13 +49,9 @@ function createTodoItem(req, res, next) {
 
   console.dir(todoItem);
 
-  r.table('todos').insert(todoItem, {returnChanges: true}).run(req.app._rdbConn, function(err, result) {
-    if(err) {
-      return next(err);
-    }
-
+  r.table('todos').insert(todoItem, {returnChanges: true}).run().then(function (result) {
     res.json(result.changes[0].new_val);
-  });
+  }).error(next);
 }
 
 /*
@@ -74,13 +60,9 @@ function createTodoItem(req, res, next) {
 function getTodoItem(req, res, next) {
   var todoItemID = req.params.id;
 
-  r.table('todos').get(todoItemID).run(req.app._rdbConn, function(err, result) {
-    if(err) {
-      return next(err);
-    }
-
+  r.table('todos').get(todoItemID).run().then(function(result) {
     res.json(result);
-  });
+  }).error(next);
 }
 
 /*
@@ -90,13 +72,10 @@ function updateTodoItem(req, res, next) {
   var todoItem = req.body;
   var todoItemID = req.params.id;
 
-  r.table('todos').get(todoItemID).update(todoItem, {returnChanges: true}).run(req.app._rdbConn, function(err, result) {
-    if(err) {
-      return next(err);
-    }
-
+  r.table('todos').get(todoItemID).update(todoItem, {returnChanges: true}).
+   run().then(function(result) {
     res.json(result.changes[0].new_val);
-  });
+  }).error(next);
 }
 
 /*
@@ -105,13 +84,9 @@ function updateTodoItem(req, res, next) {
 function deleteTodoItem(req, res, next) {
   var todoItemID = req.params.id;
 
-  r.table('todos').get(todoItemID).delete().run(req.app._rdbConn, function(err, result) {
-    if(err) {
-      return next(err);
-    }
-
+  r.table('todos').get(todoItemID).delete().run().then(function(result) {
     res.json({success: true});
-  });
+  }).error(next);
 }
 
 /*
@@ -133,8 +108,7 @@ function handleError(err, req, res, next) {
 /*
  * Store the db connection and start listening on a port.
  */
-function startExpress(connection) {
-  app._rdbConn = connection;
+function startExpress() {
   app.listen(config.express.port);
   console.log('Listening on port ' + config.express.port);
 }
@@ -144,57 +118,54 @@ function startExpress(connection) {
  * Create tables/indexes then start express
  */
 async.waterfall([
-  function connect(callback) {
-    r.connect(config.rethinkdb, callback);
-  },
-  function createDatabase(connection, callback) {
+  function createDatabase(callback) {
     //Create the database if needed.
     r.dbList().contains(config.rethinkdb.db).do(function(containsDb) {
       return r.branch(
         containsDb,
-        {created: 0},
+        r.expr('ok'),
         r.dbCreate(config.rethinkdb.db)
       );
-    }).run(connection, function(err) {
-      callback(err, connection);
-    });
+    }).run().then(function(res) {
+      callback(null);
+    }).error(callback);
   },
-  function createTable(connection, callback) {
+  function createTable(callback) {
     //Create the table if needed.
     r.tableList().contains('todos').do(function(containsTable) {
       return r.branch(
         containsTable,
-        {created: 0},
+        r.expr('ok'),
         r.tableCreate('todos')
       );
-    }).run(connection, function(err) {
-      callback(err, connection);
-    });
+    }).run().then(function(res) {
+      callback(null);
+    }).error(callback);
   },
-  function createIndex(connection, callback) {
+  function createIndex(callback) {
     //Create the index if needed.
     r.table('todos').indexList().contains('createdAt').do(function(hasIndex) {
       return r.branch(
         hasIndex,
-        {created: 0},
+        r.expr('ok'),
         r.table('todos').indexCreate('createdAt')
       );
-    }).run(connection, function(err) {
-      callback(err, connection);
-    });
+    }).run().then(function(res) {
+      callback(null);
+    }).error(callback);
   },
-  function waitForIndex(connection, callback) {
+  function waitForIndex(callback) {
     //Wait for the index to be ready.
-    r.table('todos').indexWait('createdAt').run(connection, function(err, result) {
-      callback(err, connection);
-    });
+    r.table('todos').indexWait('createdAt').run().then(function (res) {
+      callback(null);
+    }).error(callback);
   }
-], function(err, connection) {
+], function(err) {
   if(err) {
     console.error(err);
     process.exit(1);
     return;
   }
 
-  startExpress(connection);
+  startExpress();
 });
